@@ -5,9 +5,23 @@
 # =============================================================================
 import pandas as pd
 from decimal import Decimal
+import os
+from dotenv.main import load_dotenv
 
+load_dotenv()
+
+
+API_KEY_APC_ANKR = os.environ['API_KEY_APC_ANKR']
+API_KEY_POLYGON_SCAN = os.environ['API_KEY_POLYGON_SCAN']
+UNISWAP_CONTRACT_ADDRESS = os.environ['UNISWAP_CONTRACT_ADDRESS']
 
 UNISWAP_V3_POLYGON_ENDPOINT = 'https://api.thegraph.com/subgraphs/name/messari/uniswap-v3-polygon'
+
+W3_ENDPOINT = f'https://rpc.ankr.com/polygon/{API_KEY_APC_ANKR}'
+
+ABI_UNISWAP_CONTRACT = os.environ['ABI_UNISWAP_CONTRACT']
+
+ABI_UNISWAP_CONTRACT_ENDPOINT = f'https://api.polygonscan.com/api?module=contract&action=getabi&address={UNISWAP_CONTRACT_ADDRESS}&apikey={API_KEY_POLYGON_SCAN}'
 
 def pools_v3_dict(token0=None, token1=None, fee_tier=None):
     pools_df = pd.read_csv('data/raw_data/uniswap_v3/pools.csv')
@@ -36,14 +50,14 @@ THEGRAPH_QUERY_UNI_V3_POLY_SWAPS = """
                         id
                         symbol
                         name
-                        decimal
+                        decimals
                         lastPriceUSD
                     }
                     tokenOut {
                         id
                         symbol
                         name
-                        decimal
+                        decimals
                         lastPriceUSD
                     }
                     amountIn
@@ -83,10 +97,12 @@ THEGRAPH_QUERY_UNI_V3_POLY_MINTS = """
                     ) {
                     id
                     timestamp
+                    hash
                     inputTokens {
                         id
                         symbol
                         name
+                        decimals
                         lastPriceUSD
                     }
                     amountUSD
@@ -94,6 +110,9 @@ THEGRAPH_QUERY_UNI_V3_POLY_MINTS = """
                     tickUpper
                     tickLower
                     account {
+                            id
+                        }
+                    position{
                             id
                         }
                     }
@@ -104,7 +123,7 @@ THEGRAPH_QUERY_UNI_V3_POLY_MINTS = """
 def mints_v3_polygon_dict(data_el):
     data_dict = {
         'id': data_el['id'],
-        'transaction_id': data_el['position']['id'],
+        'hash': data_el['hash'],
         'owner': data_el['account']['id'],
         'timestamp': data_el['timestamp'],
         'token0_id': data_el['inputTokens'][0]['id'],
@@ -125,7 +144,7 @@ def mints_v3_polygon_dict(data_el):
 THEGRAPH_QUERY_UNI_V3_POLY_BURNS = """
             query mintsQuery($id: String!, $timestamp_start: Int!){
                 liquidityPool(id: $id) {
-                    withdraws(
+                    deposits(
                     first: 1000
                     orderBy: timestamp
                     orderDirection: asc
@@ -133,6 +152,7 @@ THEGRAPH_QUERY_UNI_V3_POLY_BURNS = """
                     ) {
                     id
                     timestamp
+                    hash
                     inputTokens {
                         id
                         symbol
@@ -154,7 +174,7 @@ THEGRAPH_QUERY_UNI_V3_POLY_BURNS = """
 def burns_v3_polygon_dict(data_el):
     data_dict = {
         'id': data_el['id'],
-        'transaction_id': data_el['position']['id'],
+        'hash': data_el['hash'],
         'owner': data_el['account']['id'],
         'timestamp': data_el['timestamp'],
         'token0_id': data_el['inputTokens'][0]['id'],
@@ -166,8 +186,6 @@ def burns_v3_polygon_dict(data_el):
         'amount0': float(data_el['inputTokenAmounts'][0]),
         'amount1': float(data_el['inputTokenAmounts'][1]),
         'amountUSD': float(data_el['amountUSD']),
-        'tickLower': int(data_el['tickLower']),
-        'tickUpper': int(data_el['tickUpper'])
     }
 
     return data_dict

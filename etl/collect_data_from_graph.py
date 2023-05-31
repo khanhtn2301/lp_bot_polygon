@@ -9,13 +9,19 @@ import os
 import sys
 import datetime
 import time
+from ast import literal_eval
+
+import warnings
+warnings.filterwarnings("ignore")
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import pandas as pd
 import requests
 import numpy as np
-from config import *
+from web3 import Web3, HTTPProvider
+from etl.config import *
 
 UNISWAP_VERSION = 'V3'
 DATA_TYPE = 'burns'
@@ -54,6 +60,7 @@ class TheGraphClient(object):
         response_ = requests.post(self._url, json=params)
         response = response_.json()
         return response
+    
 
 class UniswapV3PolygonData(UniswapGraphClient):
 
@@ -134,14 +141,14 @@ class UniswapV3PolygonData(UniswapGraphClient):
             return None
         
         feeTiermapping = {
-                         0.01: 100,
-                         0.05: 500,
-                         0.3: 3000,
-                         1: 10000
-                        }
+                 '0.01': 100,
+                 '0.05': 500,
+                 '0.3': 3000,
+                 '1': 10000
+                }
 
         df = pd.DataFrame(all_data)
-        df['feeTier'] = df['feeTier'].replace(feeTiermapping)
+        df['feeTier'] = df['feeTier'].replace(feeTiermapping).astype(int)
         df.drop_duplicates(inplace=True)
 
         return df
@@ -196,7 +203,7 @@ class UniswapV3PolygonData(UniswapGraphClient):
                 if len(data_response) < 1000:
                     has_data = False
 
-                time.sleep(2)
+                time.sleep(3)
         except:
             print('Error retrieving, process the acquired data')
 
@@ -212,6 +219,39 @@ class UniswapV3PolygonData(UniswapGraphClient):
             df['priceInToken1'] = abs(df.amount1 / df.amount0)
 
         return df
+    
+def get_contract_abi_from_polygonscan():
+    w3 = Web3(HTTPProvider(W3_ENDPOINT))
+    
+    contract = w3.eth.contract(address=UNISWAP_CONTRACT_ADDRESS, abi=ABI_UNISWAP_CONTRACT)
+    return w3, contract
+
+def get_tick_range_from_hash(w3, tx_hash, tx_type):
+
+    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    logs_receipt = tx_receipt.logs
+
+    assert tx_type in ['mint', 'burn']
+    if tx_type == 'mint':
+        transaction_log = '0x7a53080ba414158be7ec69b987b5fb7d07dee101fe85488f0853ae16239d0bde'
+        for log in logs_receipt:
+            if log['topics'][0].hex() == transaction_log:
+                amount = []
+                for i in range(1, 4):
+                    amount.append(literal_eval('0x' + log['data'].hex()[2 + 64 * i: 66 + 64 * i]))
+                return [literal_eval(log['topics'][2].hex()), literal_eval(log['topics'][3].hex())] + amount
+            else:
+                return 0, 0, 0, 0, 0
+    else:
+        transaction_log = '0x0c396cd989a39f4459b5fa1aed6a9a8dcdbc45908acfd67e028cd568da98982c'
+        for log in logs_receipt:
+            if log['topics'][0].hex() == transaction_log:
+                amount = []
+                for i in range(0, 3):
+                    amount.append(literal_eval('0x' + log['data'].hex()[2 + 64 * i: 66 + 64 * i]))
+                return [literal_eval(log['topics'][2].hex()), literal_eval(log['topics'][3].hex())] + amount
+            else:
+                return 0, 0, 0, 0, 0
 
 def run_v3_all_pools(client):
 
@@ -260,19 +300,20 @@ def run_v3(client, pools, data_type, fetch_latest=False):
                                                  query_str=THEGRAPH_QUERY_UNI_V3_POLY_SWAPS,
                                                  data_dict_fn=swaps_v3_polygon_dict,
                                                  timestamp_start=timestamp_start)
-            df_token0_in = df[df['tokenIn'] == pool['token0_symbol']]
-            df_token0_out = df[df['tokenOut'] == pool['token0_symbol']]
-            replace_In_to_0 = {'tokenIn': 'token0', 'tokenIn_symbol': 'token0_symbol', 'amountIn': 'amount0', 'tokenIn_lastPriceUSD': 'token0_lastPriceUSD'}
-            replace_Out_to_1 = {'tokenOut': 'token1', 'tokenOut_symbol': 'token1_symbol', 'tokenOut': 'amount1', 'tokenOut_lastPriceUSD': 'token1_lastPriceUSD'}
-            df_token0_in = df_token0_in.rename(columns=replace_In_to_0 + replace_Out_to_1)
-            df_token0_in[list(replace_Out_to_1.values())[:-1]] = df_token0_in[list(replace_Out_to_1.values())[:-1]] * -1
+            if df is not None:
+                df_token0_in = df[df['tokenIn_symbol'] == pool['token0_symbol']]
+                df_token0_out = df[df['tokenOut_symbol'] == pool['token0_symbol']]
+                replace_In_to_0 = {'tokenIn_symbol': 'token0_symbol', 'amountIn': 'amount0', 'tokenIn_lastPriceUSD': 'token0_lastPriceUSD', 'tokenIn_id': 'token0_id'}
+                replace_Out_to_1 = {'tokenOut_symbol': 'token1_symbol', 'amountOut': 'amount1', 'tokenOut_lastPriceUSD': 'token1_lastPriceUSD', 'tokenOut_id': 'token1_id'}
+                df_token0_in = df_token0_in.rename(columns=replace_In_to_0 | replace_Out_to_1)
+                df_token0_in[list(replace_Out_to_1.values())[:-2]] = df_token0_in[list(replace_Out_to_1.values())[:-2]] * -1
 
-            replace_In_to_1 = {'tokenIn': 'token1', 'tokenIn_symbol': 'token1_symbol', 'amountIn': 'amount1', 'tokenIn_lastPriceUSD': 'token1_lastPriceUSD'}
-            replace_Out_to_0 = {'tokenOut': 'token0', 'tokenOut_symbol': 'token0_symbol', 'tokenOut': 'amount0', 'tokenOut_lastPriceUSD': 'token0_lastPriceUSD'}
-            df_token0_out = df_token0_out.rename(columns=replace_In_to_1 + replace_Out_to_0)
-            df_token0_out[list(replace_Out_to_0.values())[:-1]] = df_token0_out[list(replace_Out_to_0.values())[:-1]] * -1
+                replace_In_to_1 = {'tokenIn_symbol': 'token1_symbol', 'amountIn': 'amount1', 'tokenIn_lastPriceUSD': 'token1_lastPriceUSD', 'tokenIn_id': 'token0_id'}
+                replace_Out_to_0 = {'tokenOut_symbol': 'token0_symbol', 'amountOut': 'amount0', 'tokenOut_lastPriceUSD': 'token0_lastPriceUSD', 'tokenOut_id': 'token1_id'}
+                df_token0_out = df_token0_out.rename(columns=replace_In_to_1 | replace_Out_to_0)
+                df_token0_out[list(replace_Out_to_0.values())[:-2]] = df_token0_out[list(replace_Out_to_0.values())[:-2]] * -1
 
-            df = pd.concat([df_token0_in, df_token0_out], axis=0).sort_values('timestamp')
+                df = pd.concat([df_token0_in, df_token0_out], axis=0).sort_values('timestamp')
 
 
         elif data_type == "mints":
@@ -281,12 +322,42 @@ def run_v3(client, pools, data_type, fetch_latest=False):
                                                  query_str=THEGRAPH_QUERY_UNI_V3_POLY_MINTS,
                                                  data_dict_fn=mints_v3_polygon_dict,
                                                  timestamp_start=timestamp_start)
+            if df is not None:
+                w3, contract = get_contract_abi_from_polygonscan()
+                hash_dict = { i : -1 for i in df['hash'].tolist()}
+                new_data = []
+                for hash in df['hash']:
+                    hash_dict[hash] += 1
+                    tick_lower, tick_upper, amountUSD, amount0, amount1 = get_tick_range_from_hash(w3, hash, 'mint')
+                    new_data.append((tick_lower, tick_upper, amountUSD, amount0, amount1))
+                df[['tickLower', 'tickUpper', 'amount', 'amount0', 'amount1']] = new_data
+                convert_tick = (-1) ** ((df['token0_priceUSD'] / df['token1_priceUSD']  >= 1) * 1 + 1)
+                df['tickLower'], df['tickUpper'] = df['tickLower'] * convert_tick, df['tickUpper'] * convert_tick
+                def transform_tick(row):
+                    return min(row['tickLower'], row['tickUpper']), max(row['tickLower'], row['tickUpper'])
+                df['tickLower'], df['tickUpper'] = zip(*df.apply(transform_tick, axis=1))
+
         elif data_type == "burns":
             df = client.get_historical_pool_data(pool_address=pool_address,
                                                  data_type="burns",
                                                  query_str=THEGRAPH_QUERY_UNI_V3_POLY_BURNS,
                                                  data_dict_fn=burns_v3_polygon_dict,
                                                  timestamp_start=timestamp_start)
+            if df is not None:
+                w3, contract = get_contract_abi_from_polygonscan()
+                hash_dict = { i : -1 for i in df['hash'].tolist()}
+                new_data = []
+                for hash in df['hash']:
+                    hash_dict[hash] += 1
+                    tick_lower, tick_upper, amountUSD, amount0, amount1 = get_tick_range_from_hash(w3, hash, 'burn')
+                    new_data.append((tick_lower, tick_upper, amountUSD, amount0, amount1))
+                df[['tickLower', 'tickUpper', 'amount', 'amount0', 'amount1']] = new_data
+                convert_tick = (-1) ** ((df['token0_priceUSD'] / df['token1_priceUSD']  >= 1) * 1 + 1)
+                df['tickLower'], df['tickUpper'] = df['tickLower'] * convert_tick, df['tickUpper'] * convert_tick
+                def transform_tick(row):
+                    return min(row['tickLower'], row['tickUpper']), max(row['tickLower'], row['tickUpper'])
+                df['tickLower'], df['tickUpper'] = zip(*df.apply(transform_tick, axis=1))
+
         else:
             raise ValueError("Unsupported data_type {}".format(data_type))
 
@@ -327,9 +398,9 @@ if __name__ == '__main__':
 
     # pools_dict_arr = pools_v3_dict(token0=TOKEN0, token1=TOKEN1, fee_tier=FEE_TIER)
     # _pools = pools_dict_arr[:200]
-    # graph_client = UniswapV3PolygonData()
+    graph_client = UniswapV3PolygonData()
     # run this to get pool data
-    # run_v3_all_pools(client=graph_client)
+    run_v3_all_pools(client=graph_client)
     # run this to get data
     # run_v3(client=graph_client, pools=_pools, data_type=DATA_TYPE, fetch_latest=FETCH_LATEST)
 
