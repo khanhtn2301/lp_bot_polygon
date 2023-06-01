@@ -353,12 +353,6 @@ def run_v3(client, pools, data_type, fetch_latest=False):
                     tick_lower, tick_upper, amountUSD, amount0, amount1 = get_tick_range_from_hash(w3, hash, 'burn')
                     new_data.append((tick_lower, tick_upper, amountUSD, amount0, amount1))
                 df[['tickLower', 'tickUpper', 'amount', 'amount0', 'amount1']] = new_data
-                convert_tick = (-1) ** ((df['token0_priceUSD'] / df['token1_priceUSD']  >= 1) * 1 + 1)
-                df['tickLower'], df['tickUpper'] = df['tickLower'] * convert_tick, df['tickUpper'] * convert_tick
-                def transform_tick(row):
-                    return min(row['tickLower'], row['tickUpper']), max(row['tickLower'], row['tickUpper'])
-                df['tickLower'], df['tickUpper'] = zip(*df.apply(transform_tick, axis=1))
-
         else:
             raise ValueError("Unsupported data_type {}".format(data_type))
 
